@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
-from PIL import Image, ImageEnhance, ImageFilter
+from PIL import Image
 import tempfile
 
 # =========================
@@ -20,8 +20,8 @@ try:
 except Exception:
     JST = timezone(timedelta(hours=9))
 
-st.set_page_config(page_title="数学（シャープ文字PNG対応・安定版）", layout="wide")
-st.markdown("<h1 style='font-size:20pt;'>数学（シャープ文字PNG対応・安定版）</h1>", unsafe_allow_html=True)
+st.set_page_config(page_title="数学（PNG最終安定版）", layout="wide")
+st.markdown("<h1 style='font-size:20pt;'>数学（PNG最終安定版）</h1>", unsafe_allow_html=True)
 
 # ==============
 # ユーティリティ
@@ -71,44 +71,40 @@ def png_to_pdf_bytes(png_path: Path) -> bytes:
     c = canvas.Canvas(pdf_buf, pagesize=A4)
     width, height = A4
     img_w, img_h = img.size
-
     ratio = min(width / img_w, height / img_h)
     new_w, new_h = img_w * ratio, img_h * ratio
     x_offset = (width - new_w) / 2
     y_offset = (height - new_h) / 2
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-        img.save(tmp.name, format="JPEG", dpi=(300, 300))
+        img.save(tmp.name, format="JPEG", dpi=(250, 250))
         c.drawImage(tmp.name, x_offset, y_offset, new_w, new_h)
     c.showPage()
     c.save()
     return pdf_buf.getvalue()
 
 # ======================
-# 高DPI・シャープ化表示
+# 軽量・確実な画像表示
 # ======================
-def enhance_image_for_display(img: Image.Image, upscale_factor=1.2) -> Image.Image:
-    """高DPI化＋アンシャープマスクで文字をくっきり"""
-    w, h = img.size
-    upscaled = img.resize((int(w * upscale_factor), int(h * upscale_factor)), Image.LANCZOS)
-    sharp = upscaled.filter(ImageFilter.UnsharpMask(radius=1.0, percent=150))
-    enhancer = ImageEnhance.Contrast(sharp)
-    return enhancer.enhance(1.1)
-
 def show_image_with_pdf_download(file_path: Path):
-    """PNG画像を高品質で表示し、PDFとしてダウンロードできるようにする"""
-    with st.spinner("画像を読み込み中..."):
-        img = Image.open(file_path)
-        sharp_img = enhance_image_for_display(img, upscale_factor=1.2)
-        st.image(sharp_img, caption=file_path.name, width=900)
-    pdf_bytes = png_to_pdf_bytes(file_path)
-    st.download_button(
-        label=f"📥 {file_path.name.replace('.png','.pdf')} をダウンロード",
-        data=pdf_bytes,
-        file_name=file_path.name.replace(".png", ".pdf"),
-        mime="application/pdf",
-        key=f"dl_{file_path.name}"
-    )
-    ss.png_displayed = True
+    """PNG画像を軽量＆高品質で表示し、PDFとしてダウンロード"""
+    try:
+        with st.spinner(f"{file_path.name} を読み込み中..."):
+            img = Image.open(file_path)
+            w, h = img.size
+            # 軽く高解像度化（スケーリング1.1倍）
+            img_resized = img.resize((int(w*1.1), int(h*1.1)), Image.LANCZOS)
+            st.image(img_resized, caption=file_path.name, width=900)
+        pdf_bytes = png_to_pdf_bytes(file_path)
+        st.download_button(
+            label=f"📥 {file_path.name.replace('.png','.pdf')} をダウンロード",
+            data=pdf_bytes,
+            file_name=file_path.name.replace(".png", ".pdf"),
+            mime="application/pdf",
+            key=f"dl_{file_path.name}"
+        )
+        ss.png_displayed = True
+    except Exception as e:
+        st.error(f"画像の表示に失敗しました: {e}")
 
 # ======================
 # ファイル収集
@@ -194,4 +190,15 @@ def render_problem(i: int):
                 ss.phase = "explain"
                 st.rerun()
 
-# 以下（解答・採点・終了画面）は従来コードと同じ
+# =======================
+# ページルーター
+# =======================
+current_id = get_current_id()
+if current_id is None:
+    st.error("CSVのIDが不正です。")
+    st.stop()
+
+st.caption(f"進行状況： {ss.current_id_idx+1}/{len(available_ids)}　｜　現在ID：{current_id}")
+
+if ss.phase == "problem":
+    render_problem(current_id)
