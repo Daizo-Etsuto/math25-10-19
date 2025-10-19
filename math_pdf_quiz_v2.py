@@ -20,8 +20,8 @@ try:
 except Exception:
     JST = timezone(timedelta(hours=9))
 
-st.set_page_config(page_title="数学（PNG→PDF対応）", layout="wide")
-st.markdown("<h1 style='font-size:20pt;'>数学（PNG→PDF対応）</h1>", unsafe_allow_html=True)
+st.set_page_config(page_title="数学（高解像度PNG対応）", layout="wide")
+st.markdown("<h1 style='font-size:20pt;'>数学（高解像度PNG対応）</h1>", unsafe_allow_html=True)
 
 # ==============
 # ユーティリティ
@@ -74,7 +74,6 @@ def png_to_pdf_bytes(png_path: Path) -> bytes:
     width, height = A4
     img_w, img_h = img.size
 
-    # 縦横比を保ってA4に収まるようにリサイズ
     ratio = min(width / img_w, height / img_h)
     new_w, new_h = img_w * ratio, img_h * ratio
     x_offset = (width - new_w) / 2
@@ -90,11 +89,16 @@ def png_to_pdf_bytes(png_path: Path) -> bytes:
     return pdf_data
 
 # ======================
-# 画像表示＆PDFダウンロード
+# 高解像度画像表示＋PDFダウンロード
 # ======================
 def show_image_with_pdf_download(file_path: Path):
-    """PNG画像を表示し、PDFとしてダウンロードできるようにする"""
-    st.image(str(file_path), caption=file_path.name, use_container_width=True)
+    """PNG画像を高品質で表示し、PDFとしてダウンロードできるようにする"""
+    img = Image.open(file_path)
+    # 高DPI環境向けに2倍スケーリングして滑らかに
+    w, h = img.size
+    upscale = img.resize((w, h), Image.LANCZOS)
+    st.image(upscale, caption=file_path.name, width=900)
+
     pdf_bytes = png_to_pdf_bytes(file_path)
     st.download_button(
         label=f"📥 {file_path.name.replace('.png','.pdf')} をダウンロード",
