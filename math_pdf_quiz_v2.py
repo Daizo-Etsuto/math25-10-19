@@ -1,21 +1,15 @@
 import os
 import io
 import time
-import webbrowser
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
 import pandas as pd
 import streamlit as st
-from pdf2image import convert_from_path
+from reportlab.lib.pagesizes import A4
+from reportlab.pdfgen import canvas
+from PIL import Image
 import tempfile
-
-# =========================
-# ✅ Linux（Streamlit Cloud）用 poppler 自動インストール
-# =========================
-if not Path("/usr/bin/pdftoppm").exists():
-    st.write("🔧 Installing poppler-utils (for PDF → PNG conversion)...")
-    os.system("apt-get update && apt-get install -y poppler-utils > /dev/null 2>&1")
 
 # =========================
 # 基本設定
@@ -26,8 +20,8 @@ try:
 except Exception:
     JST = timezone(timedelta(hours=9))
 
-st.set_page_config(page_title="数学（数字入力）", layout="wide")
-st.markdown("<h1 style='font-size:20pt;'>数学（数字入力）</h1>", unsafe_allow_html=True)
+st.set_page_config(page_title="数学（PNG→PDF対応）", layout="wide")
+st.markdown("<h1 style='font-size:20pt;'>数学（PNG→PDF対応）</h1>", unsafe_allow_html=True)
 
 # ==============
 # ユーティリティ
@@ -70,42 +64,56 @@ def seconds_to_hms(sec: int) -> str:
     return f"{m}分{s}秒"
 
 # ======================
-# PDF → PNG変換・表示
+# PNG → PDF変換関数
 # ======================
-def show_pdf_as_images(file_path: Path):
-    """PDFをPNGに変換してStreamlit上で表示"""
-    st.divider()
-    st.markdown(f"#### 📘 {file_path.name} を表示")
+def png_to_pdf_bytes(png_path: Path) -> bytes:
+    """PNGを1ページのPDFに変換してバイト列を返す"""
+    img = Image.open(png_path).convert("RGB")
+    pdf_buf = io.BytesIO()
+    c = canvas.Canvas(pdf_buf, pagesize=A4)
+    width, height = A4
+    img_w, img_h = img.size
 
-    with open(file_path, "rb") as f:
-        data = f.read()
+    # 縦横比を保ってA4に収まるようにリサイズ
+    ratio = min(width / img_w, height / img_h)
+    new_w, new_h = img_w * ratio, img_h * ratio
+    x_offset = (width - new_w) / 2
+    y_offset = (height - new_h) / 2
+    img_temp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+    img.save(img_temp.name, format="JPEG")
+    c.drawImage(img_temp.name, x_offset, y_offset, new_w, new_h)
+    c.showPage()
+    c.save()
+    pdf_data = pdf_buf.getvalue()
+    img_temp.close()
+    os.unlink(img_temp.name)
+    return pdf_data
+
+# ======================
+# 画像表示＆PDFダウンロード
+# ======================
+def show_image_with_pdf_download(file_path: Path):
+    """PNG画像を表示し、PDFとしてダウンロードできるようにする"""
+    st.image(str(file_path), caption=file_path.name, use_container_width=True)
+    pdf_bytes = png_to_pdf_bytes(file_path)
     st.download_button(
-        label=f"📥 {file_path.name} をダウンロード",
-        data=data,
-        file_name=file_path.name,
+        label=f"📥 {file_path.name.replace('.png','.pdf')} をダウンロード",
+        data=pdf_bytes,
+        file_name=file_path.name.replace(".png", ".pdf"),
         mime="application/pdf",
         key=f"dl_{file_path.name}"
     )
-
-    with tempfile.TemporaryDirectory() as tmpdir:
-        try:
-            images = convert_from_path(file_path, dpi=200, output_folder=tmpdir)
-            for idx, img in enumerate(images, 1):
-                st.image(img, caption=f"{file_path.name} ページ {idx}", use_container_width=True)
-        except Exception as e:
-            st.error(f"PDFの画像変換に失敗しました: {e}")
-            return
-    ss.pdf_downloaded = True
+    ss.png_displayed = True
 
 # ======================
 # ファイル収集
 # ======================
 root = "."
-pdfs = find_files(root, (".pdf",))
+images = find_files(root, (".png", ".jpg", ".jpeg"))
 csvs = find_files(root, (".csv",))
 problems, solutions = {}, {}
 
-for p in pdfs:
+for p in images:
     name = p.stem
     if name.startswith("問題"):
         try:
@@ -142,7 +150,7 @@ ss.setdefault("start_time", time.time())
 ss.setdefault("problem_start_time", time.time())
 ss.setdefault("answers", {})
 ss.setdefault("user_name", "")
-ss.setdefault("pdf_downloaded", False)
+ss.setdefault("png_displayed", False)
 ss.setdefault("graded", False)
 
 def get_current_id():
@@ -164,11 +172,11 @@ def render_problem(i: int):
     st.caption(f"経過時間：{seconds_to_hms(elapsed)}　｜　累計時間：{seconds_to_hms(int(time.time() - ss.start_time))}")
 
     if i in problems:
-        show_pdf_as_images(problems[i])
+        show_image_with_pdf_download(problems[i])
     else:
-        st.info("問題PDFが見つかりません。")
+        st.info("問題画像が見つかりません。")
 
-    if ss.pdf_downloaded:
+    if ss.png_displayed:
         st.divider()
         c1, c2 = st.columns([1,1])
         with c1:
@@ -244,16 +252,16 @@ def render_explain(i: int):
         st.markdown(f"[🎬 解説動画を見る]({video_links[0]})", unsafe_allow_html=True)
 
     if i in solutions:
-        show_pdf_as_images(solutions[i])
+        show_image_with_pdf_download(solutions[i])
     else:
-        st.info("解説PDFが見つかりません。")
+        st.info("解説画像が見つかりません。")
 
     st.divider()
     if ss.current_id_idx + 1 < len(available_ids):
         if st.button("次の問題へ ▶"):
             ss.current_id_idx += 1
             ss.problem_start_time = time.time()
-            ss.pdf_downloaded = False
+            ss.png_displayed = False
             ss.phase = "problem"
             st.rerun()
     else:
