@@ -1,16 +1,16 @@
 import os
 import io
+import tempfile
 import time
-import base64
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 from pathlib import Path
+import base64
 import pandas as pd
 import streamlit as st
 from reportlab.lib.pagesizes import A4
 from reportlab.pdfgen import canvas
 from PIL import Image
-import tempfile
 
 # =========================
 # 基本設定
@@ -21,12 +21,12 @@ try:
 except Exception:
     JST = timezone(timedelta(hours=9))
 
-st.set_page_config(page_title="数学（PNG／高速・安定 v6）", layout="wide")
-st.markdown("<h1 style='font-size:20pt;'>数学（PNG／高速・安定 v6）</h1>", unsafe_allow_html=True)
+st.set_page_config(page_title="数学（PNG／超軽量 v7）", layout="wide")
+st.markdown("<h1 style='font-size:20pt;'>数学（PNG／超軽量 v7）</h1>", unsafe_allow_html=True)
 
-# =================
-# ユーティリティ
-# =================
+# =========================
+# ユーティリティ関数
+# =========================
 def find_files(root: str, pattern_exts: Tuple[str, ...]) -> List[Path]:
     p = Path(root)
     found = []
@@ -50,18 +50,19 @@ def seconds_to_hms(sec: int) -> str:
         return f"{h}時間{m}分{s}秒"
     return f"{m}分{s}秒"
 
-@st.cache_data
-def load_image(file_path: Path):
-    """画像をキャッシュして高速表示"""
-    img = Image.open(file_path)
-    return img
-
-def b64_of_file(path: Path) -> str:
-    with open(path, "rb") as f:
-        return base64.b64encode(f.read()).decode("ascii")
+# =========================
+# 軽量画像キャッシュ＆一時保存
+# =========================
+@st.cache_data(show_spinner=False)
+def load_image_fast(file_path: Path) -> str:
+    """画像をキャッシュし、一時JPEGファイルURLを返す"""
+    img = Image.open(file_path).convert("RGB")
+    img.thumbnail((1500, 1500))  # 軽量化（縮小表示でも十分）
+    tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".jpg")
+    img.save(tmp.name, format="JPEG", quality=85)
+    return tmp.name
 
 def png_to_pdf_bytes(png_path: Path) -> bytes:
-    """PNGを1ページのPDFに変換"""
     img = Image.open(png_path).convert("RGB")
     pdf_buf = io.BytesIO()
     c = canvas.Canvas(pdf_buf, pagesize=A4)
@@ -72,25 +73,21 @@ def png_to_pdf_bytes(png_path: Path) -> bytes:
     x_offset = (width - new_w) / 2
     y_offset = (height - new_h) / 2
     with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmp:
-        img.save(tmp.name, format="JPEG", dpi=(250, 250))
+        img.save(tmp.name, format="JPEG", dpi=(200, 200))
         c.drawImage(tmp.name, x_offset, y_offset, new_w, new_h)
     c.showPage()
     c.save()
     return pdf_buf.getvalue()
 
 def show_image_with_tools(file_path: Path):
-    """画像表示＋PDFダウンロード＋別タブ拡大"""
-    img = load_image(file_path)
-    st.image(img, caption=file_path.name, width=900)
+    """画像＋PDFダウンロード＋別タブ拡大"""
     try:
-        b64 = b64_of_file(file_path)
+        tmp_img = load_image_fast(file_path)
+        st.image(tmp_img, caption=file_path.name, width=850)
         st.markdown(
-            f'<a href="data:image/png;base64,{b64}" target="_blank">🔎 別タブで拡大（スマホでピンチズーム可）</a>',
+            f'<a href="file://{tmp_img}" target="_blank">🔎 別タブで拡大表示（スマホ対応）</a>',
             unsafe_allow_html=True
         )
-    except Exception:
-        pass
-    try:
         pdf_bytes = png_to_pdf_bytes(file_path)
         st.download_button(
             label=f"📥 {file_path.stem}.pdf をダウンロード",
@@ -100,14 +97,14 @@ def show_image_with_tools(file_path: Path):
             key=f"dl_{file_path.name}"
         )
     except Exception as e:
-        st.error(f"PDF変換でエラー: {e}")
+        st.error(f"画像表示エラー: {e}")
 
+# =========================
+# CSVロード
+# =========================
 def load_answer_csv(csv_paths: List[Path]) -> Optional[pd.DataFrame]:
-    """CSV（または解答ファイル）をロード（エンコーディング複数試行）"""
-    priority = [p for p in csv_paths if ("解答" in p.stem or "answer" in p.stem)]
-    ordered = priority + [p for p in csv_paths if p not in priority]
     for enc in ("utf-8-sig", "utf-8", "cp932", "shift-jis"):
-        for path in ordered:
+        for path in csv_paths:
             try:
                 df = pd.read_csv(path, encoding=enc)
                 df["__csv_path__"] = str(path)
@@ -116,24 +113,24 @@ def load_answer_csv(csv_paths: List[Path]) -> Optional[pd.DataFrame]:
                 continue
     return None
 
-# =================
-# データ読み込み
-# =================
+# =========================
+# データセット読み込み
+# =========================
 root = "."
 images = find_files(root, (".png", ".jpg", ".jpeg"))
 csvs = find_files(root, (".csv",))
 problems, solutions = {}, {}
 
 for p in images:
-    n = p.stem
-    if n.startswith("問題"):
+    name = p.stem
+    if name.startswith("問題"):
         try:
-            problems[int(n.replace("問題", ""))] = p
+            problems[int(name.replace("問題", ""))] = p
         except Exception:
             pass
-    elif n.startswith("解答") or n.startswith("解説"):
+    elif name.startswith("解答") or name.startswith("解説"):
         try:
-            solutions[int(n.replace("解答", "").replace("解説", ""))] = p
+            solutions[int(name.replace("解答", "").replace("解説", ""))] = p
         except Exception:
             pass
 
@@ -142,8 +139,7 @@ if answer_df is None:
     st.error("CSVファイルが見つかりません。")
     st.stop()
 
-# 必須列を補完
-for col in ["タイトル", "ID", "小問", "問題レベル", "答え", "解説動画"]:
+for col in ["タイトル","ID","小問","問題レベル","答え","解説動画"]:
     if col not in answer_df.columns:
         answer_df[col] = pd.NA
 
@@ -152,16 +148,16 @@ answer_df["小問"] = answer_df["小問"].astype(str)
 answer_df["答え"] = answer_df["答え"].apply(as_str)
 available_ids = sorted({int(x) for x in answer_df["ID"].unique() if x.isdigit()})
 
-# =================
-# セッション状態
-# =================
+# =========================
+# セッション管理
+# =========================
 ss = st.session_state
-ss.setdefault("phase", "problem")            # problem / solution / explain / end
+ss.setdefault("phase", "problem")
 ss.setdefault("current_id_idx", 0)
 ss.setdefault("start_time", time.time())
 ss.setdefault("problem_start_time", time.time())
-ss.setdefault("answers", {})                 # {(ID,小問): {...}}
-ss.setdefault("graded", False)               # 直近の問題で採点済みか
+ss.setdefault("answers", {})
+ss.setdefault("graded", False)
 ss.setdefault("user_name", "")
 
 def get_current_id():
@@ -172,27 +168,22 @@ def get_current_id():
     return available_ids[ss.current_id_idx]
 
 def rows_for_id(i: int):
-    rows = answer_df[answer_df["ID"] == str(i)].copy()
-    if rows.empty:
-        return rows
-    rows = rows.sort_values(by=["小問"], key=lambda s: s.astype(str))
-    return rows
+    return answer_df[answer_df["ID"] == str(i)].sort_values(by=["小問"], key=lambda s: s.astype(str))
 
-# =================
-# 画面共通：ヘッダー
-# =================
+# =========================
+# 共通タイマー
+# =========================
 def header_timer():
     elapsed = int(time.time() - ss.problem_start_time)
     total = int(time.time() - ss.start_time)
     st.caption(f"経過時間：{seconds_to_hms(elapsed)}　｜　累計：{seconds_to_hms(total)}")
 
-# =================
-# 問題画面
-# =================
+# =========================
+# 各画面
+# =========================
 def render_problem(i: int):
     st.markdown(f"<h2>問題 {i}</h2>", unsafe_allow_html=True)
     header_timer()
-
     if i in problems:
         show_image_with_tools(problems[i])
     else:
@@ -209,21 +200,15 @@ def render_problem(i: int):
             ss.phase = "explain"
             st.rerun()
 
-# =================
-# 解答画面
-# =================
 def render_solution(i: int):
     st.subheader(f"解答記入 {i}")
     header_timer()
-
     rows = rows_for_id(i)
 
-    # 画像（折りたたみ）
     if i in problems:
         with st.expander("問題画像を表示", expanded=False):
             show_image_with_tools(problems[i])
 
-    # 入力欄と直近判定
     st.divider()
     for _, r in rows.iterrows():
         sub = as_str(r["小問"]); key = (str(i), sub)
@@ -232,19 +217,16 @@ def render_solution(i: int):
             st.write(f"小問 {sub}")
         with colM:
             val = st.text_input("入力", value=ss.answers.get(key, {}).get("入力", ""), key=f"in_{i}_{sub}")
-            cur = ss.answers.get(key, {})
-            cur["入力"] = val
-            ss.answers[key] = cur
+            ss.answers[key] = ss.answers.get(key, {})
+            ss.answers[key]["入力"] = val
         with colR:
-            result = ss.answers.get(key, {}).get("判定", "")
-            if result:
-                st.write(result)
+            if "判定" in ss.answers[key]:
+                st.write(ss.answers[key]["判定"])
 
-    # 採点／戻る／解説へ
     c1, c2, c3 = st.columns([1,1,1])
     with c1:
         if st.button("🔎 採点", type="primary", use_container_width=True):
-            per_elapsed = int(time.time() - ss.problem_start_time)   # B: 操作時にのみ更新
+            per_elapsed = int(time.time() - ss.problem_start_time)
             total_elapsed = int(time.time() - ss.start_time)
             for _, r in rows.iterrows():
                 sub = as_str(r["小問"]); key = (str(i), sub)
@@ -256,95 +238,60 @@ def render_solution(i: int):
                     "判定": "正解！" if user_inp == correct else "不正解",
                     "経過秒": per_elapsed,
                     "累計秒": total_elapsed,
-                    "難易度": as_str(r["問題レベル"]),
                     "タイトル": as_str(r["タイトル"]),
                 }
-            ss.graded = True  # 即時表示
+            ss.graded = True
     with c2:
         if st.button("◀ 問題に戻る", use_container_width=True):
-            ss.phase = "problem"
-            st.rerun()
+            ss.phase = "problem"; st.rerun()
     with c3:
         if st.button("解説へ ▶", use_container_width=True):
-            ss.phase = "explain"
-            st.rerun()
+            ss.phase = "explain"; st.rerun()
 
-    # 採点結果の即時表示（rerunしない）
     if ss.graded:
-        st.success("採点結果：")
-        res_rows = []
-        for _, r in rows.iterrows():
-            sub = as_str(r["小問"]); key = (str(i), sub)
-            rec = ss.answers.get(key, {})
-            res_rows.append({
-                "小問": sub,
-                "入力": rec.get("入力", ""),
-                "正解": rec.get("正解", ""),
-                "判定": rec.get("判定", ""),
-            })
-        st.table(pd.DataFrame(res_rows))
+        st.success("採点結果")
+        res = [{"小問": k[1], **v} for k, v in ss.answers.items() if k[0] == str(i)]
+        st.dataframe(pd.DataFrame(res)[["小問","入力","正解","判定"]], hide_index=True)
 
-# =================
-# 解説画面
-# =================
 def render_explain(i: int):
     st.subheader(f"解説 {i}")
     header_timer()
-
     rows = rows_for_id(i)
-    # 解説動画リンク（最初の非空を採用）
-    video_link = ""
-    for link in rows["解説動画"].tolist():
-        s = as_str(link).strip()
-        if s:
-            video_link = s
-            break
-    if video_link:
-        st.markdown(f"[🎬 解説動画を見る]({video_link})", unsafe_allow_html=True)
-
-    # 解説画像
+    video = next((as_str(v).strip() for v in rows["解説動画"].tolist() if as_str(v).strip()), "")
+    if video:
+        st.markdown(f"[🎬 解説動画を見る]({video})", unsafe_allow_html=True)
     if i in solutions:
         show_image_with_tools(solutions[i])
     else:
         st.info("解説画像が見つかりません。")
-
     st.divider()
     if ss.current_id_idx + 1 < len(available_ids):
         if st.button("次の問題へ ▶", use_container_width=True):
             ss.current_id_idx += 1
-            ss.problem_start_time = time.time()  # 次の問題の開始時刻にリセット（Bポリシー）
+            ss.problem_start_time = time.time()
             ss.phase = "problem"
             ss.graded = False
             st.rerun()
     else:
         st.success("全ての問題が終了しました。結果画面に移動します。")
-        ss.phase = "end"
-        st.rerun()
+        ss.phase = "end"; st.rerun()
 
-# =================
-# 結果画面
-# =================
 def render_end():
     st.subheader("結果")
     header_timer()
     ss.user_name = st.text_input("氏名を入力してください", value=ss.user_name)
-
-    rows = []
-    for (ID, sub), rec in ss.answers.items():
-        rows.append({
-            "ID": ID,
-            "小問": sub,
-            "入力": rec.get("入力", ""),
-            "正解": rec.get("正解", ""),
-            "判定": rec.get("判定", ""),
-            "経過時間": seconds_to_hms(int(rec.get("経過秒",0))),
-            "累計時間": seconds_to_hms(int(rec.get("累計秒",0))),
-            "難易度": rec.get("難易度",""),
-            "タイトル": rec.get("タイトル",""),
-        })
-    df = pd.DataFrame(rows, columns=["ID","小問","入力","正解","判定","経過時間","累計時間","難易度","タイトル"])
+    rows = [{
+        "ID": k[0],
+        "小問": k[1],
+        "入力": v.get("入力",""),
+        "正解": v.get("正解",""),
+        "判定": v.get("判定",""),
+        "経過時間": seconds_to_hms(int(v.get("経過秒",0))),
+        "累計時間": seconds_to_hms(int(v.get("累計秒",0))),
+        "タイトル": v.get("タイトル","")
+    } for k,v in ss.answers.items()]
+    df = pd.DataFrame(rows)
     st.dataframe(df, hide_index=True, use_container_width=True)
-
     if ss.user_name:
         buf = io.StringIO()
         ts = datetime.now(JST).strftime("%Y%m%d_%H%M%S")
@@ -353,15 +300,14 @@ def render_end():
                            file_name=f"{ss.user_name}_結果_{ts}.csv", mime="text/csv")
     st.button("はじめから", on_click=lambda: ss.clear())
 
-# =================
-# ルーター
-# =================
+# =========================
+# ページルーター
+# =========================
 current_id = get_current_id()
 if current_id is None:
-    st.error("CSVのIDが不正です。")
-    st.stop()
+    st.error("CSVのIDが不正です。"); st.stop()
 
-st.caption(f"進行状況： {ss.current_id_idx+1}/{len(available_ids)}　｜　現在ID：{current_id}")
+st.caption(f"進行状況： {ss.current_id_idx+1}/{len(available_ids)} ｜ 現在ID：{current_id}")
 
 if ss.phase == "problem":
     render_problem(current_id)
