@@ -10,6 +10,16 @@ import streamlit as st
 from pdf2image import convert_from_path
 import tempfile
 
+# =========================
+# ✅ Linux（Streamlit Cloud）用 poppler 自動インストール
+# =========================
+if not Path("/usr/bin/pdftoppm").exists():
+    st.write("🔧 Installing poppler-utils (for PDF → PNG conversion)...")
+    os.system("apt-get update && apt-get install -y poppler-utils > /dev/null 2>&1")
+
+# =========================
+# 基本設定
+# =========================
 try:
     from zoneinfo import ZoneInfo
     JST = ZoneInfo("Asia/Tokyo")
@@ -19,7 +29,11 @@ except Exception:
 st.set_page_config(page_title="数学（数字入力）", layout="wide")
 st.markdown("<h1 style='font-size:20pt;'>数学（数字入力）</h1>", unsafe_allow_html=True)
 
+# ==============
+# ユーティリティ
+# ==============
 def find_files(root: str, pattern_exts: Tuple[str, ...]) -> List[Path]:
+    """指定拡張子のファイルを収集"""
     p = Path(root)
     found = []
     for ext in pattern_exts:
@@ -27,6 +41,7 @@ def find_files(root: str, pattern_exts: Tuple[str, ...]) -> List[Path]:
     return found
 
 def load_answer_csv(csv_paths: List[Path]) -> Optional[pd.DataFrame]:
+    """CSV（または解答ファイル）をロード"""
     priority = [p for p in csv_paths if ("解答" in p.stem or "answer" in p.stem)]
     ordered = priority + [p for p in csv_paths if p not in priority]
     for enc in ("utf-8-sig", "utf-8", "cp932", "shift-jis"):
@@ -54,9 +69,14 @@ def seconds_to_hms(sec: int) -> str:
         return f"{h}時間{m}分{s}秒"
     return f"{m}分{s}秒"
 
+# ======================
+# PDF → PNG変換・表示
+# ======================
 def show_pdf_as_images(file_path: Path):
+    """PDFをPNGに変換してStreamlit上で表示"""
     st.divider()
     st.markdown(f"#### 📘 {file_path.name} を表示")
+
     with open(file_path, "rb") as f:
         data = f.read()
     st.download_button(
@@ -66,6 +86,7 @@ def show_pdf_as_images(file_path: Path):
         mime="application/pdf",
         key=f"dl_{file_path.name}"
     )
+
     with tempfile.TemporaryDirectory() as tmpdir:
         try:
             images = convert_from_path(file_path, dpi=200, output_folder=tmpdir)
@@ -76,6 +97,9 @@ def show_pdf_as_images(file_path: Path):
             return
     ss.pdf_downloaded = True
 
+# ======================
+# ファイル収集
+# ======================
 root = "."
 pdfs = find_files(root, (".pdf",))
 csvs = find_files(root, (".csv",))
@@ -108,6 +132,9 @@ answer_df["小問"] = answer_df["小問"].astype(str)
 answer_df["答え"] = answer_df["答え"].apply(as_str)
 available_ids = sorted({int(x) for x in answer_df["ID"].unique() if str(x).isdigit()})
 
+# =================
+# セッション管理
+# =================
 ss = st.session_state
 ss.setdefault("phase", "problem")
 ss.setdefault("current_id_idx", 0)
@@ -128,14 +155,19 @@ def get_current_id():
 def rows_for_id(i: int):
     return answer_df[answer_df["ID"] == str(i)].sort_values(by=["小問"], key=lambda s: s.astype(str))
 
+# =======================
+# 問題画面
+# =======================
 def render_problem(i: int):
     st.markdown(f"<h2 style='font-size:20pt;'>問題 {i}</h2>", unsafe_allow_html=True)
     elapsed = int(time.time() - ss.problem_start_time)
     st.caption(f"経過時間：{seconds_to_hms(elapsed)}　｜　累計時間：{seconds_to_hms(int(time.time() - ss.start_time))}")
+
     if i in problems:
         show_pdf_as_images(problems[i])
     else:
         st.info("問題PDFが見つかりません。")
+
     if ss.pdf_downloaded:
         st.divider()
         c1, c2 = st.columns([1,1])
@@ -149,9 +181,13 @@ def render_problem(i: int):
                 ss.phase = "explain"
                 st.rerun()
 
+# =======================
+# 解答・採点
+# =======================
 def render_solution(i: int):
     st.subheader(f"解答記入 {i}")
     rows = rows_for_id(i)
+
     for _, r in rows.iterrows():
         sub = as_str(r["小問"])
         key = (str(i), sub)
@@ -169,6 +205,7 @@ def render_solution(i: int):
             result = ss.answers.get(key, {}).get("判定", "")
             if result:
                 st.write(result)
+
     if st.button("採点", type="primary"):
         per_elapsed = int(time.time() - ss.problem_start_time)
         total_elapsed = int(time.time() - ss.start_time)
@@ -189,22 +226,28 @@ def render_solution(i: int):
             }
         ss.graded = True
         st.rerun()
+
     if ss.graded:
         st.divider()
         if st.button("解説を見る ▶"):
             ss.phase = "explain"
             st.rerun()
 
+# =======================
+# 解説画面
+# =======================
 def render_explain(i: int):
     st.subheader(f"解説 {i}")
     rows = rows_for_id(i)
     video_links = [as_str(v) for v in rows["解説動画"].tolist() if isinstance(v, str) and v.strip()]
     if video_links:
         st.markdown(f"[🎬 解説動画を見る]({video_links[0]})", unsafe_allow_html=True)
+
     if i in solutions:
         show_pdf_as_images(solutions[i])
     else:
         st.info("解説PDFが見つかりません。")
+
     st.divider()
     if ss.current_id_idx + 1 < len(available_ids):
         if st.button("次の問題へ ▶"):
@@ -218,6 +261,9 @@ def render_explain(i: int):
         ss.phase = "end"
         st.rerun()
 
+# =======================
+# 終了画面
+# =======================
 def render_end():
     st.subheader("終了")
     st.write("結果のCSVをダウンロードできます。")
@@ -237,6 +283,7 @@ def render_end():
         })
     df = pd.DataFrame(rows, columns=["タイトル","小問","難易度","正誤","経過時間","累計時間","入力","正解","ID"])
     st.dataframe(df, hide_index=True, use_container_width=True)
+
     if ss.user_name:
         buf = io.StringIO()
         timestamp = datetime.now(JST).strftime("%Y%m%d_%H%M%S")
@@ -245,8 +292,12 @@ def render_end():
         st.download_button("結果CSVをダウンロード", buf.getvalue().encode("utf-8-sig"), file_name=filename, mime="text/csv")
     else:
         st.info("氏名を入力するとダウンロードできます。")
+
     st.button("はじめから", on_click=lambda: ss.clear())
 
+# =======================
+# ページルーター
+# =======================
 current_id = get_current_id()
 if current_id is None:
     st.error("CSVのIDが不正です。")
