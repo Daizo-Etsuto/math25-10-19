@@ -1,4 +1,5 @@
 import datetime
+import re
 import urllib.parse
 import requests
 import streamlit as st
@@ -17,6 +18,13 @@ def get_github_raw_url(filename: str) -> str:
     return f"https://raw.githubusercontent.com/{GITHUB_USER}/{GITHUB_REPO}/{GITHUB_BRANCH}/{encoded_name}"
 
 
+def build_result_filename(student_name: str, timestamp: str) -> str:
+    """氏名_math_YYYYMMDD_HHMMSS.csv 形式でファイル名を生成する"""
+    clean_name = re.sub(r'[\\/:*?"<>|]+', "_", student_name.strip())
+    clean_name = re.sub(r"\s+", "_", clean_name) or "未入力"
+    return f"{clean_name}_math_{timestamp}.csv"
+
+
 # --- 2. デモ用問題データ（今回は問題1と解説1を使用） ---
 QUESTIONS = [
     {
@@ -26,7 +34,7 @@ QUESTIONS = [
         "level": "基本",
         "image_url": get_github_raw_url("問題1.png"),
         "answer": "14",
-        "explanation_url": get_github_raw_url("解答1.png"),  # 解説あり（解説なしにする場合は "" にする）
+        "explanation_url": get_github_raw_url("解答1.png"),
     }
 ]
 
@@ -45,9 +53,13 @@ if "is_sent" not in st.session_state:
     st.session_state.is_sent = False
 if "send_status" not in st.session_state:
     st.session_state.send_status = None
+if "session_timestamp" not in st.session_state:
+    jst = datetime.timezone(datetime.timedelta(hours=9))
+    st.session_state.session_timestamp = datetime.datetime.now(jst).strftime("%Y%m%d_%H%M%S")
 
 
 def reset_test():
+    jst = datetime.timezone(datetime.timedelta(hours=9))
     st.session_state.q_index = 0
     st.session_state.current_answer = ""
     st.session_state.results = []
@@ -55,6 +67,7 @@ def reset_test():
     st.session_state.show_explanation = False
     st.session_state.is_sent = False
     st.session_state.send_status = None
+    st.session_state.session_timestamp = datetime.datetime.now(jst).strftime("%Y%m%d_%H%M%S")
 
 
 def move_to_next_or_finish():
@@ -102,17 +115,21 @@ def submit_answer():
 
 
 # --- 5. GAS 送信関数 ---
-def send_results_to_gas(student_name: str, results: list[dict], score: int, total: int) -> tuple[bool, str]:
+def send_results_to_gas(
+    student_name: str,
+    results: list[dict],
+    score: int,
+    total: int,
+    timestamp: str,
+) -> tuple[bool, str]:
     gas_url = st.secrets.get("GAS_URL", "")
     if not gas_url:
         return False, "Streamlit Secrets に GAS_URL が設定されていません。"
 
-    # 日本時間（JST）で YYYYMMDD_HHMMSS 形式のタイムスタンプを生成
-    jst = datetime.timezone(datetime.timedelta(hours=9))
-    timestamp = datetime.datetime.now(jst).strftime("%Y%m%d_%H%M%S")
-
+    filename = build_result_filename(student_name, timestamp)
     payload = {
         "timestamp": timestamp,
+        "filename": filename,
         "subject": "数学",
         "student_name": student_name.strip(),
         "score": score,
@@ -125,7 +142,8 @@ def send_results_to_gas(student_name: str, results: list[dict], score: int, tota
         response.raise_for_status()
         res_json = response.json()
         if res_json.get("status") == "ok":
-            return True, "Google ドライブへ学習結果を保存しました。"
+            saved_name = res_json.get("filename", filename)
+            return True, f"Google ドライブに「{saved_name}」として保存しました。"
         return False, f"GAS側でエラーが発生しました: {res_json.get('message', '不明なエラー')}"
     except Exception as e:
         return False, f"送信エラーが発生しました: {e}"
@@ -157,6 +175,9 @@ if st.session_state.is_finished:
         disabled=st.session_state.is_sent,
     )
 
+    preview_filename = build_result_filename(student_name, st.session_state.session_timestamp)
+    st.caption(f"保存ファイル名: `{preview_filename}`")
+
     if st.button(
         "結果を Google ドライブに送信する",
         type="primary",
@@ -171,6 +192,7 @@ if st.session_state.is_finished:
                 results=st.session_state.results,
                 score=score,
                 total=total,
+                timestamp=st.session_state.session_timestamp,
             )
             if ok:
                 st.session_state.is_sent = True
